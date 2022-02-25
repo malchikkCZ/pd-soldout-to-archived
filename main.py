@@ -1,44 +1,28 @@
+'''
+This script takes a Matrixify export file with active products, filter those that was last updated more than
+XY days ago and are currently hidden and deletes them. It also creates pages with the same handle and the same
+content as deleted products and sets redirects.
+
+Output is an Excel file to be imported by Matrixify.
+
+Necessary columns in source file are:
+ID, Handle, Command, Title, Body HTML, Tags, Variant SKU, Image Src, Image Position and all Variant Metafields.
+
+Proceed with caution!
+'''
+
 import pandas as pd
 import datetime as dt
 import json
+import os
+
+from matrixify import Matrixify as XLS
 
 
-BESTSELLER_PREFIX = 'najpredavanejsie'
-with open('collections.json', encoding='utf8') as file:
-    HANDLE_LIST = json.load(file)
-
-
-def read_source_xlsx(filename):
-    '''Read source xls file into separate dataframes'''
-    xls = pd.ExcelFile(filename)
-    data = {}
-    for sheet in xls.sheet_names:
-        data[sheet] = pd.read_excel(xls, sheet)
-    return data
-
-
-def build_output_xlsx(df):
-    '''Write output to xls to import via Matrixify'''
-    xls_writer = pd.ExcelWriter('output.xlsx')
-    df[['ID', 'Command', 'Handle', 'Title']].to_excel(xls_writer, 'Products', index=False)
-    df[
-        [
-            'Handle', 
-            'Title', 
-            'Body HTML',
-            'Template Suffix', 
-            'Metafield: mf_pg_ap.Image_Src [string]', 
-            'Metafield: mf_pg_ap.Addtl_Images [string]', 
-            'Metafield: mf_pg_ap.Shpsys_ID [integer]', 
-            'Metafield: mf_pg_ap.Variant SKU [string]', 
-            'Metafield: mf_pg_ap.main_category [string]', 
-            'Metafield: mf_pg_ap.related_products_col [string]', 
-            'Metafield: mf_pg_ap.SHPF_BENEFITS [string]', 
-            'Metafield: mf_pg_ap.SHPF_SHORT_DESCRIPTION [string]'
-        ]
-    ].to_excel(xls_writer, 'Pages', index=False)
-    df[['Path', 'Target']].to_excel(xls_writer, 'Redirects', index=False)
-    xls_writer.save()
+BESTSELLER_PREFIX = {
+    'cz': 'nejprodavanejsi',
+    'sk': 'najpredavanejsie'
+}
 
 
 def get_reduced_df(df, column, value):
@@ -59,19 +43,20 @@ def get_last_update(row, today, delta_days):
     return False
 
 
-def get_main_collection_handle(product_tags):
+def get_main_collection_handle(product_tags, handle_list, bf_prefix):
     '''Return collection handle based on MCI product tag'''
     for tag in product_tags.split(','):
         if 'MCI' in tag:
             col_id = tag.split('MCI:')[1]
-            if col_id in HANDLE_LIST.keys():
-                return HANDLE_LIST[col_id], f'{BESTSELLER_PREFIX}-{HANDLE_LIST[col_id]}'
+            if col_id in handle_list.keys():
+                return handle_list[col_id], f'{bf_prefix}-{handle_list[col_id]}'
     return '', ''
     
 
-def main():
+def run(handle_list, lang, bf_prefix):
+
     # read source xls file
-    source = read_source_xlsx('source.xlsx')
+    source = XLS.read_source(f'source_{lang}.xlsx')
     products = source['Products'].fillna('')
 
     # group products by id to get list of all images
@@ -81,6 +66,7 @@ def main():
 
     primary_img_mask = products['Image Position'] == 1
     products = products[primary_img_mask]
+    print(products.shape)
 
     products = pd.merge(
         left=products,
@@ -107,15 +93,39 @@ def main():
     output['Metafield: mf_pg_ap.Addtl_Images [string]'] = to_archive.apply(lambda row: ';'.join(row['Addtl Images'][1:]), axis=1)
     output['Metafield: mf_pg_ap.Shpsys_ID [integer]'] = to_archive['Variant Metafield: mf_pvp.MKT_ID_SHOPSYS [number_integer]']
     output['Metafield: mf_pg_ap.Variant SKU [string]'] = to_archive['Variant SKU']
-    output['Metafield: mf_pg_ap.main_category [string]'] = to_archive.apply(lambda row: get_main_collection_handle(row['Tags'])[0], axis=1)
-    output['Metafield: mf_pg_ap.related_products_col [string]'] = to_archive.apply(lambda row: get_main_collection_handle(row['Tags'])[1], axis=1)
+    output['Metafield: mf_pg_ap.main_category [string]'] = to_archive.apply(lambda row: get_main_collection_handle(row['Tags'], handle_list, bf_prefix)[0], axis=1)
+    output['Metafield: mf_pg_ap.related_products_col [string]'] = to_archive.apply(lambda row: get_main_collection_handle(row['Tags'], handle_list, bf_prefix)[1], axis=1)
     output['Metafield: mf_pg_ap.SHPF_BENEFITS [string]'] = to_archive['Variant Metafield: mf_pvp.SHPF_BENEFITS [multi_line_text_field]']
     output['Metafield: mf_pg_ap.SHPF_SHORT_DESCRIPTION [string]'] = to_archive['Variant Metafield: mf_pvp.SHPF_SHORT_DESCRIPTION [multi_line_text_field]']
     output['Path'] = to_archive.apply(lambda row: f'/products/{row["Handle"]}', axis=1)
     output['Target'] = to_archive.apply(lambda row: f'/pages/{row["Handle"]}', axis=1)
+    print(output.shape)
 
-    build_output_xlsx(output)
+    output_schema = {
+        'Products': ['ID', 'Command', 'Handle', 'Title'],
+        'Pages': ['Handle', 'Title', 'Body HTML', 'Template Suffix', 'Metafield: mf_pg_ap.Image_Src [string]', 
+                'Metafield: mf_pg_ap.Addtl_Images [string]', 'Metafield: mf_pg_ap.Shpsys_ID [integer]', 
+                'Metafield: mf_pg_ap.Variant SKU [string]', 'Metafield: mf_pg_ap.main_category [string]', 
+                'Metafield: mf_pg_ap.related_products_col [string]', 'Metafield: mf_pg_ap.SHPF_BENEFITS [string]', 
+                'Metafield: mf_pg_ap.SHPF_SHORT_DESCRIPTION [string]'],
+        'Redirects': ['Path', 'Target']
+    }
+
+    XLS.build_output(output, output_schema, f'output_{lang}.xlsx')
 
 
 if __name__ == '__main__':
-    main()
+    pd.options.mode.chained_assignment = None
+
+    all_files = list(filter(lambda file: os.path.isfile(file), os.listdir()))
+    filenames = [file for file in all_files if file.startswith('source')]
+
+    for filename in filenames:
+        lang = filename.split('.')[0].split('_')[1].lower()
+        if not lang:
+            raise Exception('Wrong filename format')
+            
+        with open(f'collections_{lang}.json', encoding='utf8') as file:
+            handle_list = json.load(file)
+
+        run(handle_list, lang, BESTSELLER_PREFIX[lang])
