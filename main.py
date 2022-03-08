@@ -34,12 +34,20 @@ def get_reduced_df(df, column, value):
 def get_last_update(row, today, delta_days):
     '''Return if this product was last updated more than XY days ago'''
     all_tags = row['Tags'].split(',')
+    upd_tags = [tag for tag in all_tags if 'UPD:' in tag]
+    if len(upd_tags) == 0:
+        upd_tags = [tag for tag in all_tags if 'ADD:' in tag]
     threshold = today - dt.timedelta(days=delta_days)
-    for tag in all_tags:
-        if 'UPD' in tag:
-            upd_time = dt.datetime.strptime(tag.split('UPD:')[1], '%Y-%m-%d-%H-%M-%S')
-            if upd_time < threshold:
-                return True
+    last_upd_time = None
+
+    for tag in upd_tags:
+        tag_time = dt.datetime.strptime(tag.split(':')[1][:10], '%Y-%m-%d').date()
+        if last_upd_time == None or tag_time > last_upd_time:
+            last_upd_time = tag_time
+
+    if last_upd_time != None and last_upd_time < threshold:
+        return True
+
     return False
 
 
@@ -80,9 +88,9 @@ def run(handle_list, lang, bf_prefix):
     mask = products['Tags'].str.contains('PRD:Hidden')
     hidden = products[mask]
 
-    # get only products where last update is 30 days ago
-    today = dt.datetime.now()
-    hidden['mask'] = hidden.apply(lambda row: get_last_update(row, today, 30), axis=1)
+    # get only products where last update is 60 days ago
+    today = dt.date.today()
+    hidden['mask'] = hidden.apply(lambda row: get_last_update(row, today, 60), axis=1)
     to_archive = get_reduced_df(hidden, 'mask', True)
 
     # build new output dataframe
@@ -119,11 +127,13 @@ if __name__ == '__main__':
 
     all_files = list(filter(lambda file: os.path.isfile(file), os.listdir()))
     filenames = [file for file in all_files if file.startswith('source')]
+    if len(filenames) == 0:
+        raise Exception('Wrong source filename format, use source_cz.xlsx or source_sk.xlsx only.')
 
     for filename in filenames:
         lang = filename.split('.')[0].split('_')[1].lower()
         if not lang:
-            raise Exception('Wrong filename format')
+            raise Exception('Wrong source filename format, use source_cz.xlsx or source_sk.xlsx only.')
             
         with open(f'collections_{lang}.json', encoding='utf8') as file:
             handle_list = json.load(file)
