@@ -1,5 +1,5 @@
 '''
-This script takes a Matrixify export file with active products, filter those that was last updated more than
+This app takes a Matrixify export file with active products, filter those that was last updated more than
 XY days ago and are currently hidden and deletes them. It also creates pages with the same handle and the same
 content as deleted products and sets redirects.
 
@@ -19,7 +19,7 @@ import os
 from handleizer import Handleizer
 from matrixify import Matrixify
 from pim_connector import PimConnector
-from secrets import HOST, USER, PASSWORD
+from secrets import HOST, USER, PASS
 
 
 BESTSELLER_PREFIX = {
@@ -41,7 +41,7 @@ class ProductArchiver:
         self.pim = PimConnector(
             host=HOST,
             user=USER,
-            password=PASSWORD
+            password=PASS
         )
         self.galery = self.pim.get_df_from_table('galery')
 
